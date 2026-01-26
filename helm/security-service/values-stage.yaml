@@ -1,0 +1,13 @@
+replicaCount: 2
+
+env:
+  OIDC_ISSUER_URI: "https://login.microsoftonline.com/your-tenant-id/v2.0"
+  OIDC_AUDIENCE: "api://security-service"
+
+ingress:
+  enabled: true
+  hosts:
+    - host: security-service.stage.example.com
+      paths:
+        - path: /
+          pathType: Prefix

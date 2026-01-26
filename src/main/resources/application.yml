@@ -1,0 +1,23 @@
+server:
+  port: 8081
+
+spring:
+  application:
+    name: security-service
+  security:
+    oauth2:
+      resourceserver:
+        jwt:
+          issuer-uri: ${OIDC_ISSUER_URI:https://login.microsoftonline.com/your-tenant-id/v2.0}
+          audiences: ${OIDC_AUDIENCE:api://security-service}
+
+management:
+  endpoints:
+    web:
+      exposure:
+        include: health,info
+
+security:
+  claims:
+    group-role-mappings:
+      "00000000-0000-0000-0000-000000000000": "ADMIN"

@@ -1,0 +1,25 @@
+replicaCount: 1
+
+image:
+  repository: security-service
+  tag: latest
+  pullPolicy: IfNotPresent
+
+service:
+  type: ClusterIP
+  port: 8081
+
+ingress:
+  enabled: false
+  className: nginx
+  hosts:
+    - host: security-service.local
+      paths:
+        - path: /
+          pathType: Prefix
+
+env:
+  OIDC_ISSUER_URI: "https://login.microsoftonline.com/your-tenant-id/v2.0"
+  OIDC_AUDIENCE: "api://security-service"
+
+resources: {}

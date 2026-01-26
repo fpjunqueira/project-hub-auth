@@ -1,0 +1,8 @@
+Security Service deployed.
+
+Release: {{ .Release.Name }}
+Namespace: {{ .Release.Namespace }}
+Service: {{ .Release.Name }}:{{ .Values.service.port }}
+
+Try:
+  kubectl get svc {{ .Release.Name }} -n {{ .Release.Namespace }}
