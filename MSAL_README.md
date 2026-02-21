@@ -120,6 +120,73 @@ The security-service is a **resource server**. It validates access tokens genera
 IdP (the same tokens MSAL acquires). It does not use MSAL directly, but it depends on the
 tokens produced by MSAL flows on the client side.
 
+### Key Files in the Angular App (project-hub-app)
+
+#### `src/app/auth/msal.config.ts`
+
+MSAL configuration:
+
+- **Client config** – `clientId`, `authority`, `redirectUri`, `postLogoutRedirectUri`, `knownAuthorities` from environment
+- **Cache** – `BrowserCacheLocation.LocalStorage`
+- **Guard config** – `InteractionType.Redirect` and scopes
+- **Protected resource map** – When `auth.enabled` is true:
+  - `/api` → `api://project-hub/.default`
+  - `/security` → `api://security-service/.default`
+
+#### `src/app/auth/auth.service.ts`
+
+Wraps `MsalService` for app use:
+
+- **`login()`** – calls `msalService.loginRedirect()` when MSAL is enabled
+- **`logout()`** – calls `msalService.logoutRedirect()`
+- **`isAuthenticated()`** – checks `msalService.instance.getAllAccounts().length > 0`
+- **`getCurrentUser()`** – uses `msalService.instance.getActiveAccount()` or `getAllAccounts()[0]`
+- **`initialize()`** – initializes MSAL, calls `handleRedirectPromise()` to process return from IdP, sets active account
+
+#### `src/app/app.config.ts`
+
+MSAL bootstrap and providers:
+
+- **`MSAL_INSTANCE`** – creates `PublicClientApplication` from `msalConfig`
+- **`MSAL_GUARD_CONFIG`** / **`MSAL_INTERCEPTOR_CONFIG`** – guard and interceptor config
+- **`MsalService`** – always provided
+- **When `auth.enabled`** – registers `MsalInterceptor`, `MsalGuard`, `MsalBroadcastService`
+- **App initializer** – runs `authService.initialize()` on startup (handles redirect callback)
+
+#### `src/app/components/login/login.component.ts`
+
+Entry point for sign-in:
+
+- If auth enabled → `authService.login()` → triggers MSAL redirect
+- If disabled → uses local auth via `loginLocal()`
+
+#### `src/environments/environment.ts` & `environment.development.ts`
+
+Toggles auth mode:
+
+- **`auth.enabled`** – true for production (MSAL), false for development (local auth)
+- When enabled: `clientId`, `authority`, `redirectUri`, `scopes`, `knownAuthorities`
+- When disabled: mock user for local dev
+
+#### `src/app/auth/auth.guard.ts`
+
+Route guards using `AuthService.isAuthenticated()`:
+
+- **`authGuard`** – protects routes; redirects unauthenticated users to `/login`
+- **`loginGuard`** – redirects authenticated users to `/dashboard` when on login page
+
+#### `src/app/auth/local-auth.interceptor.ts`
+
+- When `auth.enabled` is **false** → attaches local JWT to `/api` requests
+- When `auth.enabled` is **true** → passes through; `MsalInterceptor` attaches tokens
+
+### End-to-End MSAL Flow
+
+1. **Login** – User clicks Sign in → `LoginComponent` → `AuthService.login()` → `MsalService.loginRedirect()` → redirect to Azure Entra ID
+2. **Callback** – After login, MSAL handles redirect; `initialize()` runs `handleRedirectPromise()`, sets active account
+3. **API calls** – `MsalInterceptor` attaches Bearer access tokens to `/api` and `/security` requests per protected resource map
+4. **Route protection** – `authGuard` blocks protected routes if no MSAL account
+
 ## 7) Common Questions
 
 ### Is MSAL required for OAuth2?
@@ -142,9 +209,127 @@ and includes safe defaults for token handling.
 - `README.md` (Security Service)
 - `architecture.md` (Security Service)
 - `explanation.md` (Security Service)
-- Angular `auth` folder (`c:\git\angular\project-hub\src\app\auth`)
+- Angular `auth` folder (`c:\git\angular\project-hub-app\src\app\auth`)
 
-## 9) Glossary
+## 9) Azure Entra ID Configuration Guide
+
+This section describes how to configure Azure Entra ID (formerly Azure AD) so the Angular
+app and backend services can validate tokens issued by the IdP.
+
+### 9.1 Current Implementation Summary
+
+| Component | Status |
+|-----------|--------|
+| **Angular (project-hub-app)** | MSAL wired with redirect flow. When `auth.enabled` is true, uses MSAL to redirect to Azure and attach tokens to `/api` and `/security`. |
+| **security-service** | OAuth2 resource server; validates Entra ID tokens via `issuer-uri` and `audiences`. |
+| **project-hub-service** | Currently uses local JWT (HS256 via `/api/auth/login`). Needs OAuth2 resource server config to validate Entra ID tokens for full MSAL integration. |
+
+### 9.2 Create Three App Registrations
+
+| App Type | Purpose | Audience ID |
+|----------|---------|-------------|
+| **Single-page application (SPA)** | Angular frontend | — |
+| **Web API** | project-hub API | `api://project-hub` |
+| **Web API** | security-service API | `api://security-service` |
+
+### 9.3 SPA App Registration
+
+1. Go to **Azure Portal** → **Microsoft Entra ID** → **App registrations** → **New registration**
+2. Name: e.g. `project-hub-spa`
+3. Supported account types: choose single-tenant, multi-tenant, or B2C as needed
+4. Redirect URI: select **Single-page application (SPA)** and add:
+   - `http://localhost:4200/` (development)
+   - `https://your-production-domain.com/` (production)
+5. Register and copy the **Application (client) ID** → use as `environment.auth.clientId`
+6. Copy **Directory (tenant) ID** → use in `authority` and backend issuer configuration
+
+### 9.4 API App Registrations (project-hub and security-service)
+
+For each API app:
+
+1. **New registration** → name e.g. `project-hub-api`, `security-service-api`
+2. Do **not** add redirect URIs
+3. Copy **Application (client) ID**
+4. Go to **Expose an API**:
+   - Set Application ID URI to `api://project-hub` or `api://security-service` respectively
+   - Add a scope (e.g. `access_as_user`) or rely on `.default` (Entra adds it automatically)
+5. Ensure the SPA (and other clients) are granted permission to call this API
+
+### 9.5 Grant SPA API Permissions
+
+1. Open the SPA app registration → **API permissions** → **Add a permission**
+2. Choose **My APIs** and select each API app
+3. Add delegated permissions:
+   - `api://project-hub/.default`
+   - `api://security-service/.default`
+4. Optionally add Microsoft Graph: `User.Read`, `openid`, `profile` if needed
+5. If required by your tenant, click **Grant admin consent**
+
+### 9.6 Angular Environment Configuration
+
+Update `environment.ts` (or production environment) with real values:
+
+```typescript
+auth: {
+  enabled: true,
+  clientId: '<your-spa-client-id>',
+  authority: 'https://login.microsoftonline.com/<tenant-id>',
+  redirectUri: 'http://localhost:4200/',
+  postLogoutRedirectUri: 'http://localhost:4200/',
+  knownAuthorities: ['https://login.microsoftonline.com/<tenant-id>/'],
+  scopes: ['openid', 'profile', 'email'],
+  mockUser: { /* ... */ }
+}
+```
+
+**Important:**
+
+- `redirectUri` must **exactly** match the SPA redirect URI configured in Azure (including trailing slash)
+- For local dev, use `http://localhost:4200/` not just `/`
+
+### 9.7 Backend Configuration
+
+**security-service** (`application.yml` or env vars):
+
+```yaml
+OIDC_ISSUER_URI: https://login.microsoftonline.com/<tenant-id>/v2.0
+OIDC_AUDIENCE: api://security-service
+```
+
+**project-hub-service** (when configured for Entra ID):
+
+- Add OAuth2 resource server configuration so it validates tokens issued by Entra ID
+- Align issuer and audience with the `api://project-hub` app registration
+
+### 9.8 knownAuthorities
+
+- **Single-tenant Entra ID**: `['https://login.microsoftonline.com/<tenant-id>/']`
+- **B2C or custom domain**: add the B2C authority URL(s) (e.g. `https://yourtenant.b2clogin.com/`)
+
+This avoids CORS and token validation issues with non-default issuer domains.
+
+### 9.9 Disable Implicit Flow
+
+- Ensure **implicit grant** is **disabled** in the SPA app registration
+- MSAL uses Authorization Code + PKCE, which does not rely on implicit flow
+
+### 9.10 Pre-Go-Live Checklist
+
+| Item | Check |
+|------|-------|
+| Redirect URIs | Exactly match between Azure app registration and `environment.auth` |
+| API exposure | Both APIs have `api://project-hub` and `api://security-service` as Application ID URIs |
+| Permissions | SPA has delegated permission to both APIs |
+| Admin consent | Granted if required by your tenant |
+| project-hub-service | Configured as OAuth2 resource server for Entra tokens (see implementation details) |
+
+### 9.11 Proxy and Token Audience
+
+The Angular proxy routes `/api` to the project-hub-service. Add a proxy entry for the
+security-service if the app calls it (e.g. `/security`). MSAL will attach the correct
+tokens per the protected resource map in `msal.config.ts`.
+
+## 10) Glossary
 
 - **OAuth2**: Authorization framework for delegated access.
 - **OIDC**: Identity layer on top of OAuth2 (adds ID tokens).
