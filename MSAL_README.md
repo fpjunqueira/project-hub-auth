@@ -222,7 +222,7 @@ app and backend services can validate tokens issued by the IdP.
 |-----------|--------|
 | **Angular (project-hub-app)** | MSAL wired with redirect flow. When `auth.enabled` is true, uses MSAL to redirect to Azure and attach tokens to `/api` and `/security`. |
 | **security-service** | OAuth2 resource server; validates Entra ID tokens via `issuer-uri` and `audiences`. |
-| **project-hub-service** | Currently uses local JWT (HS256 via `/api/auth/login`). Needs OAuth2 resource server config to validate Entra ID tokens for full MSAL integration. |
+| **project-hub-service** | Dual mode: `local` (username/password + HS256 JWT via `/api/auth/login`) or `entra` (OAuth2 resource server validating Entra ID tokens). Switch via `app.auth.mode` or `entra` profile. |
 
 ### 9.2 Create Three App Registrations
 
@@ -296,10 +296,27 @@ OIDC_ISSUER_URI: https://login.microsoftonline.com/<tenant-id>/v2.0
 OIDC_AUDIENCE: api://security-service
 ```
 
-**project-hub-service** (when configured for Entra ID):
+**project-hub-service** (Entra ID mode):
 
-- Add OAuth2 resource server configuration so it validates tokens issued by Entra ID
-- Align issuer and audience with the `api://project-hub` app registration
+1. Run with the `entra` profile: `-Dspring.profiles.active=h2,entra`
+2. Set required env vars:
+   - `OIDC_ISSUER_URI`: `https://login.microsoftonline.com/<tenant-id>/v2.0`
+   - `OIDC_AUDIENCE`: `api://project-hub` (optional, default)
+3. Optionally map Azure AD groups to roles in `application-entra.yml`:
+   ```yaml
+   security:
+     claims:
+       group-role-mappings:
+         "<azure-ad-group-object-id>": "ADMIN"
+   ```
+
+4. To start the backend from the Angular app directory, add this to `package.json`:
+   ```json
+   "start:backend:entra": "cd ../../java/project-hub-service && mvn spring-boot:run -Dspring-boot.run.profiles=h2,entra"
+   ```
+   Then run `npm run start:backend:entra` (with `OIDC_ISSUER_URI` and optionally `OIDC_AUDIENCE` set in the environment).
+
+In Entra mode, local auth (`/api/auth/login`) is disabled; the Angular app must use MSAL.
 
 ### 9.8 knownAuthorities
 
@@ -321,7 +338,7 @@ This avoids CORS and token validation issues with non-default issuer domains.
 | API exposure | Both APIs have `api://project-hub` and `api://security-service` as Application ID URIs |
 | Permissions | SPA has delegated permission to both APIs |
 | Admin consent | Granted if required by your tenant |
-| project-hub-service | Configured as OAuth2 resource server for Entra tokens (see implementation details) |
+| project-hub-service | Run with `entra` profile and `OIDC_ISSUER_URI` set |
 
 ### 9.11 Proxy and Token Audience
 
